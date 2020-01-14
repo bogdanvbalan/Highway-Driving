@@ -54,7 +54,7 @@ int main() {
   // Starting lane
   int lane = 1;
   // Reference velocity
-  double ref_vel = 49.5; // mph
+  double ref_vel = 0; // mph
   
   h.onMessage([&map_waypoints_x,&map_waypoints_y,&map_waypoints_s,
                &map_waypoints_dx,&map_waypoints_dy,&ref_vel,&lane]
@@ -127,11 +127,22 @@ int main() {
                 
                 /* do some logic here, lower reference velocity so we don't crash into the car in front of us,
                 could also flag to try to change lanes */
-                ref_vel = 29.5; /* mph*/
+                too_close = true; /* too close from the car in front */
                 
               }
             }
           }
+          
+          /* Handle the acceleration without exceeding the jerk */
+          if (too_close){
+            /* There's a car in front and we need to deccelerate */
+            ref_vel -= .224;
+          }
+          else if (ref_vel < 49.5){
+            /* We need to accelerate to the maximum allowed speed*/
+            ref_vel += .224;
+          }
+          
           /* create a list of widely spaced (x,y) waypoints, evenly spaced at 30m */
           vector<double> ptsx;
           vector<double> ptsy;
