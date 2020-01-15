@@ -28,7 +28,7 @@ int main() {
   string map_file_ = "../data/highway_map.csv";
   // The max s value before wrapping around the track back to 0
   double max_s = 6945.554;
-
+  
   std::ifstream in_map_(map_file_.c_str(), std::ifstream::in);
 
   string line;
@@ -100,47 +100,30 @@ int main() {
           
           json msgJson;
           
+          double recommended_speed;
+          ACTION move = processData(car_s, end_path_s, lane, sensor_fusion, prev_size, recommended_speed);
           
-          if (prev_size > 0){
-            car_s = end_path_s;
+          switch(move){
+            case CHANGE_LANE_LEFT:
+              lane -= 1;
+              break;
+            case CHANGE_LANE_RIGHT:
+              lane += 1;
+              break;
+            case STAY_IN_LANE:
+              break;
+            default:
+              break;
           }
           
-          bool too_close = false;
-          
-          /* find ref_v to use */
-          for (int i = 0; i < sensor_fusion.size(); i++){
-            
-            /* car is in my lane */
-            float d = sensor_fusion[i][6];
-            
-            if (d < (2 + 4 * lane + 2) && d > (2 + 4 * lane - 2)){
-              double vx = sensor_fusion[i][3];
-              double vy = sensor_fusion[i][4];
-              double check_speed = sqrt( vx * vx + vy * vy);
-              double check_car_s = sensor_fusion[i][5];
-              
-              /* if using previous points can project s value out */
-              check_car_s += ((double) prev_size * .02 * check_speed);
-              
-              /* check s values greater than mine and s gap */
-              if ((check_car_s > car_s) && (check_car_s - car_s) < 30){
-                
-                /* do some logic here, lower reference velocity so we don't crash into the car in front of us,
-                could also flag to try to change lanes */
-                too_close = true; /* too close from the car in front */
-                
-              }
+          if (ref_vel < recommended_speed){
+            ref_vel += 0.5f;
+            if (ref_vel > TOP_MPH){
+              ref_vel = TOP_MPH;
             }
           }
-          
-          /* Handle the acceleration without exceeding the jerk */
-          if (too_close){
-            /* There's a car in front and we need to deccelerate */
-            ref_vel -= .224;
-          }
-          else if (ref_vel < 49.5){
-            /* We need to accelerate to the maximum allowed speed*/
-            ref_vel += .224;
+          else if (ref_vel > recommended_speed){
+            ref_vel -= 1.0f;
           }
           
           /* create a list of widely spaced (x,y) waypoints, evenly spaced at 30m */
@@ -187,18 +170,15 @@ int main() {
             
           }
           
-          /* in frenet add evenly 30m spaced points ahead of the starting reference*/
-          vector<double> next_wp0 = getXY(car_s + 30, (2 + 4 * lane), map_waypoints_s, map_waypoints_x, map_waypoints_y);
-          vector<double> next_wp1 = getXY(car_s + 60, (2 + 4 * lane), map_waypoints_s, map_waypoints_x, map_waypoints_y);
-          vector<double> next_wp2 = getXY(car_s + 90, (2 + 4 * lane), map_waypoints_s, map_waypoints_x, map_waypoints_y);
-          
-          ptsx.push_back(next_wp0[0]);
-          ptsx.push_back(next_wp1[0]);
-          ptsx.push_back(next_wp2[0]);
-          
-          ptsy.push_back(next_wp0[1]);
-          ptsy.push_back(next_wp1[1]);
-          ptsy.push_back(next_wp2[1]);
+          /* add some points in front */
+          for (int i = 0; i < 3; i++){
+            int step = 50;
+            int s_ahead = i * step + step;
+            std::vector<double> next_wp = getXY(car_s + s_ahead, ((LANE_WIDTH / 2) + LANE_WIDTH * lane), map_waypoints_s, map_waypoints_x, map_waypoints_y);
+            ptsx.push_back(next_wp[0]);
+            ptsy.push_back(next_wp[1]);
+            
+          }
           
           for (int i = 0; i < ptsx.size(); i++){
             /* shift car reference angle to 0 degrees*/
@@ -227,7 +207,7 @@ int main() {
           }
           
           /* calculate how o break up spline points os that we travel at our desired reference velocity */
-          double target_x = 30.0;
+          double target_x = 100.0;
           double target_y = s(target_x);
           double target_dist = sqrt((target_x) * (target_x) + (target_y) * (target_y));
           

@@ -4,10 +4,32 @@
 #include <math.h>
 #include <string>
 #include <vector>
+#include <map>
 
 // for convenience
 using std::string;
 using std::vector;
+
+
+/* Add a type for actions */
+typedef enum {
+  STAY_IN_LANE = 0,
+  CHANGE_LANE_LEFT,
+  CHANGE_LANE_RIGHT
+}ACTION;
+
+/* Params */
+constexpr int INVALID_LANE = 100000;
+constexpr int LANE_WIDTH = 4;
+constexpr double MAX_DIST_REAR = -25.0;
+constexpr double MAX_DIST_FRONT = 75.0;
+constexpr double MPS_TO_MPH = 2.23694;
+constexpr double MPH_TO_MPS = 0.44704;
+constexpr double TOP_MPH = 49.5;
+constexpr int LANE_CHANGE_NEEDED = 500;
+constexpr int CAR_IN_LANE = 1000;
+constexpr int MINIMUM_CLEARANCE_FRONT =  35;
+constexpr int MINIMUM_CLEARANCE_REAR  = -15;
 
 // Checks if the SocketIO event has JSON data.
 // If there is data the JSON object in string format will be returned,
@@ -152,6 +174,105 @@ vector<double> getXY(double s, double d, const vector<double> &maps_s,
   double y = seg_y + d*sin(perp_heading);
 
   return {x,y};
+}
+
+/* Process the date and return an action to be performed */
+ACTION processData(double my_car_s, double my_future_s, int lane, std::vector<std::vector<double>> sensor_fusion, int prev_size, double &speed){
+  ACTION result = STAY_IN_LANE;
+  
+  /* the speed of the car in front */
+  double car_ahead_speed = 0;
+  
+  /* lane costs */
+  std::map<int,int> lane_cost;
+  lane_cost[-1] = INVALID_LANE;
+  lane_cost[0] = 0;
+  lane_cost[1] = 0;
+  lane_cost[2] = 0;
+  lane_cost[3] = INVALID_LANE;
+  
+  /* Track closest cars in each lane */
+  std::vector<double> closest_distance_in_lane(3, 500.0);
+  
+  for (unsigned  int i = 0; i < sensor_fusion.size(); i++){
+    double other_car_vx = sensor_fusion[i][3];
+    double other_car_vy = sensor_fusion[i][4];
+    double other_car_s  = sensor_fusion[i][5];
+    double other_car_d  = sensor_fusion[i][6];
+    
+    /* use other car velocity to calculate the s in the future */
+    double other_car_mps = sqrt(other_car_vx * other_car_vx + other_car_vy * other_car_vy );
+    double other_car_future_s = other_car_s + static_cast<double>(prev_size) * 0.02 * other_car_mps;
+    
+    /* determine the lane on which the car is */
+    int other_car_lane = floor(other_car_d / LANE_WIDTH);
+    
+    /* get the distance to the other car */
+    double other_car_distance = other_car_s - my_car_s;
+    
+    /* only consider cars that are near */
+    if ((other_car_distance < MAX_DIST_REAR) || (other_car_distance > MAX_DIST_FRONT)){
+      continue;
+    }
+    
+    /* keep track of the closest distance in each lane */
+    double future_distance = other_car_future_s - my_future_s;
+    
+    if ((future_distance > 0) && (future_distance < closest_distance_in_lane[other_car_lane])){
+      closest_distance_in_lane[other_car_lane] = future_distance;
+    }
+    
+    /* only consider cars in front*/
+    if (((other_car_distance > MINIMUM_CLEARANCE_REAR) && (other_car_distance < MINIMUM_CLEARANCE_FRONT)) ||
+            ((future_distance > MINIMUM_CLEARANCE_REAR) && (future_distance < MINIMUM_CLEARANCE_FRONT))){
+      lane_cost[other_car_lane] += CAR_IN_LANE;
+      if (lane == other_car_lane){
+        car_ahead_speed = other_car_mps * MPS_TO_MPH;
+      }
+    }
+  }
+  
+  /* if cost of current lane is high try to change the lane */
+  if (lane_cost[lane] > LANE_CHANGE_NEEDED){
+    /* get the cost for other lanes */
+    if ((lane_cost[lane - 1] >= CAR_IN_LANE) && (lane_cost[lane + 1] < CAR_IN_LANE)){
+      /* we choose to stay on current lane */
+      result = STAY_IN_LANE;
+      speed = car_ahead_speed - 1.0f;
+    }
+    else if ((lane_cost[lane - 1] < CAR_IN_LANE) && (lane_cost[lane + 1] < CAR_IN_LANE)){
+      /* we can go either way*/
+      result = (closest_distance_in_lane[lane - 1] < closest_distance_in_lane[lane + 1]) ? CHANGE_LANE_RIGHT : CHANGE_LANE_LEFT;
+      speed = TOP_MPH;
+    }
+    else if (lane_cost[lane - 1] < CAR_IN_LANE){
+      /* change to left lane*/
+      result = CHANGE_LANE_LEFT;
+      speed = TOP_MPH;
+    }
+    else if (lane_cost[lane + 1] < CAR_IN_LANE){
+      /* change to right lane*/
+      result = CHANGE_LANE_RIGHT;
+      speed = TOP_MPH;
+    }
+  }
+  else {
+    /* no need to change the lane
+    attempt to go to the middle lane*/
+    if ((lane == 0) && (lane_cost[1] < CAR_IN_LANE)){
+      result = CHANGE_LANE_RIGHT;
+      speed = TOP_MPH;
+    }
+    else if ((lane == 2) && (lane_cost[1] < CAR_IN_LANE)){
+      result = CHANGE_LANE_LEFT;
+      speed = TOP_MPH;
+    }
+    else {
+      result = STAY_IN_LANE;
+      speed = TOP_MPH;
+    }
+  }
+  return result;
 }
 
 #endif  // HELPERS_H
